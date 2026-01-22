@@ -1,1 +1,2 @@
-databricks-sdk>=0.1.0
+databricks-sdk>=0.74.0
+tqdm>=4.65.0

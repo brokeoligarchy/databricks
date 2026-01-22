@@ -4,6 +4,7 @@ List all-purpose compute clusters from sandbox-pastel.txt and fetch their policy
 Exports results to CSV format.
 """
 
+import argparse
 import csv
 import os
 import sys
@@ -13,6 +14,7 @@ from typing import List, Dict, Optional
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.compute import ClusterDetails
+from tqdm import tqdm
 
 
 def get_workspace_client() -> WorkspaceClient:
@@ -89,8 +91,9 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
     cluster_name_to_id = {}
     
     try:
-        print("Building cluster lookup maps...")
-        for cluster in w.clusters.list():
+        # Use tqdm to show progress while loading clusters
+        cluster_list = list(w.clusters.list())
+        for cluster in tqdm(cluster_list, desc="Loading clusters", unit="cluster"):
             if cluster.cluster_id:
                 all_clusters[cluster.cluster_id] = cluster
             if cluster.cluster_name:
@@ -99,8 +102,10 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
         print(f"Error listing clusters: {e}")
         sys.exit(1)
     
-    # Now fetch details for each identifier
-    for identifier in cluster_identifiers:
+    print(f"Loaded {len(all_clusters)} clusters from workspace\n")
+    
+    # Now fetch details for each identifier with progress bar
+    for identifier in tqdm(cluster_identifiers, desc="Processing clusters", unit="cluster"):
         cluster = None
         
         # Try as cluster ID first
@@ -114,15 +119,24 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
         if cluster:
             cluster_data = extract_cluster_fields(cluster)
             clusters.append(cluster_data)
-            print(f"Found: {cluster_data['cluster_name']} ({cluster_data['state']}) - Policy ID: {cluster_data['policy_id']}")
+            # Use tqdm.write() to print without interfering with progress bar
+            state = cluster_data['state'] or 'UNKNOWN'
+            policy_id = cluster_data['policy_id'] or 'None'
+            tqdm.write(f"✓ Found: {cluster_data['cluster_name']} ({state}) - Policy ID: {policy_id}")
         else:
             not_found.append(identifier)
-            print(f"Warning: Cluster '{identifier}' not found in workspace")
+            tqdm.write(f"✗ Not Found: {identifier}")
     
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"Summary:")
+    print(f"  Total processed: {len(cluster_identifiers)}")
+    print(f"  Found: {len(clusters)}")
+    print(f"  Not found: {len(not_found)}")
     if not_found:
-        print(f"\nWarning: {len(not_found)} cluster(s) not found: {', '.join(not_found)}")
+        print(f"\n  Not found clusters: {', '.join(not_found)}")
+    print(f"{'='*60}\n")
     
-    print(f"\nTotal clusters processed: {len(clusters)}")
     return clusters
 
 
@@ -156,17 +170,53 @@ def export_to_csv(clusters: List[Dict[str, Optional[str]]], filename: str = 'dat
     print(f"\nExported {len(clusters)} clusters to {filename}")
 
 
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='List all-purpose compute clusters from Databricks workspace with policy IDs',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python list_compute.py
+  python list_compute.py -i my-clusters.txt -o results.csv
+  python list_compute.py --input-file clusters.txt --output-file output.csv
+        """
+    )
+    
+    parser.add_argument(
+        '-i', '--input-file',
+        type=str,
+        default='sandbox-pastel.txt',
+        help='Input file containing cluster identifiers (one per line). Default: sandbox-pastel.txt'
+    )
+    
+    parser.add_argument(
+        '-o', '--output-file',
+        type=str,
+        default='databricks_compute_list.csv',
+        help='Output CSV file path. Default: databricks_compute_list.csv'
+    )
+    
+    return parser.parse_args()
+
+
 def main():
     """Main execution function."""
+    # Parse command-line arguments
+    args = parse_arguments()
+    
     print("=" * 60)
     print("Databricks All-Purpose Compute Lister")
     print("=" * 60)
+    print(f"Input file: {args.input_file}")
+    print(f"Output file: {args.output_file}")
+    print("=" * 60)
     
     # Read cluster list from file
-    cluster_identifiers = read_cluster_list('sandbox-pastel.txt')
+    cluster_identifiers = read_cluster_list(args.input_file)
     
     if not cluster_identifiers:
-        print("No cluster identifiers found in sandbox-pastel.txt")
+        print(f"No cluster identifiers found in {args.input_file}")
         sys.exit(1)
     
     # Initialize workspace client
@@ -176,7 +226,7 @@ def main():
     clusters = fetch_cluster_details(w, cluster_identifiers)
     
     # Export to CSV
-    export_to_csv(clusters)
+    export_to_csv(clusters, args.output_file)
     
     print("\nDone!")
 
