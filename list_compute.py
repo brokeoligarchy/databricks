@@ -37,27 +37,38 @@ def get_policy_name(w: WorkspaceClient, policy_id: Optional[str], policy_cache: 
     if not policy_id:
         return None
     
+    # Ensure policy_id is a string
+    policy_id_str = str(policy_id) if policy_id else None
+    if not policy_id_str:
+        return None
+    
     # Check cache first
-    if policy_id in policy_cache:
-        return policy_cache[policy_id]
+    if policy_id_str in policy_cache:
+        cached_name = policy_cache[policy_id_str]
+        return cached_name if cached_name else None
     
     # Fetch policy name from API
     try:
-        policy = w.cluster_policies.get(policy_id=policy_id)
-        policy_name = policy.name if policy else None
-        policy_cache[policy_id] = policy_name or ''
+        policy = w.cluster_policies.get(policy_id=policy_id_str)
+        policy_name = str(policy.name) if policy and policy.name else None
+        policy_cache[policy_id_str] = policy_name or ''
         return policy_name
     except Exception:
         # Policy might not exist or user might not have permission
-        policy_cache[policy_id] = ''
+        policy_cache[policy_id_str] = ''
         return None
 
 
 def extract_cluster_fields(cluster: ClusterDetails) -> Dict[str, Optional[str]]:
     """Extract cluster name and policy ID from a ClusterDetails object."""
+    # Ensure all values are strings or None, convert policy_id to string if it's an integer
+    policy_id = getattr(cluster, 'policy_id', None)
+    if policy_id is not None:
+        policy_id = str(policy_id)
+    
     return {
-        'cluster_name': cluster.cluster_name,
-        'policy_id': getattr(cluster, 'policy_id', None),
+        'cluster_name': str(cluster.cluster_name) if cluster.cluster_name else None,
+        'policy_id': policy_id,
     }
 
 
@@ -148,13 +159,17 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
             policy_id = cluster_data['policy_id']
             policy_name = get_policy_name(w, policy_id, policy_cache)
             
-            # Add policy name to cluster data
-            cluster_data['policy_name'] = policy_name
+            # Ensure policy_name is a string or None
+            policy_name_str = str(policy_name) if policy_name else None
+            
+            # Add policy name to cluster data (ensure it's a string or None)
+            cluster_data['policy_name'] = policy_name_str
             
             clusters.append(cluster_data)
             # Use tqdm.write() to print without interfering with progress bar
-            policy_display = f"{policy_name} ({policy_id})" if policy_name and policy_id else (policy_id or 'No Policy')
-            tqdm.write(f"✓ Found: {cluster_data['cluster_name']} - Policy: {policy_display}")
+            cluster_name_str = str(cluster_data['cluster_name']) if cluster_data['cluster_name'] else 'Unknown'
+            policy_display = f"{policy_name_str} ({policy_id})" if policy_name_str and policy_id else (policy_id or 'No Policy')
+            tqdm.write(f"✓ Found: {cluster_name_str} - Policy: {policy_display}")
         else:
             not_found.append(identifier)
             tqdm.write(f"✗ Not Found: {identifier}")
@@ -184,10 +199,20 @@ def export_to_csv(clusters: List[Dict[str, Optional[str]]], filename: str = 'dat
         'policy_name',
     ]
     
+    # Ensure all values are strings or None before writing to CSV
+    sanitized_clusters = []
+    for cluster in clusters:
+        sanitized_cluster = {}
+        for key in fieldnames:
+            value = cluster.get(key)
+            # Convert to string if not None, otherwise keep as None
+            sanitized_cluster[key] = str(value) if value is not None else None
+        sanitized_clusters.append(sanitized_cluster)
+    
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(clusters)
+        writer.writerows(sanitized_clusters)
     
     print(f"\nExported {len(clusters)} clusters to {filename}")
 
