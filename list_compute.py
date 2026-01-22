@@ -8,7 +8,6 @@ import argparse
 import csv
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -33,29 +32,32 @@ def get_workspace_client() -> WorkspaceClient:
     return WorkspaceClient(host=host, token=token)
 
 
-def format_datetime(dt: Optional[datetime]) -> Optional[str]:
-    """Format datetime object to ISO format string."""
-    if dt is None:
+def get_policy_name(w: WorkspaceClient, policy_id: Optional[str], policy_cache: Dict[str, str]) -> Optional[str]:
+    """Get policy name by policy ID, using cache to avoid repeated API calls."""
+    if not policy_id:
         return None
-    return dt.isoformat()
+    
+    # Check cache first
+    if policy_id in policy_cache:
+        return policy_cache[policy_id]
+    
+    # Fetch policy name from API
+    try:
+        policy = w.cluster_policies.get(policy_id=policy_id)
+        policy_name = policy.name if policy else None
+        policy_cache[policy_id] = policy_name or ''
+        return policy_name
+    except Exception:
+        # Policy might not exist or user might not have permission
+        policy_cache[policy_id] = ''
+        return None
 
 
 def extract_cluster_fields(cluster: ClusterDetails) -> Dict[str, Optional[str]]:
-    """Extract relevant fields from a ClusterDetails object."""
+    """Extract cluster name and policy ID from a ClusterDetails object."""
     return {
-        'cluster_id': cluster.cluster_id,
         'cluster_name': cluster.cluster_name,
-        'state': cluster.state.value if cluster.state else None,
         'policy_id': getattr(cluster, 'policy_id', None),
-        'cluster_source': cluster.cluster_source.value if cluster.cluster_source else None,
-        'creator_user_name': cluster.creator_user_name,
-        'start_time': format_datetime(cluster.start_time),
-        'terminated_time': format_datetime(cluster.terminated_time),
-        'num_workers': cluster.num_workers if cluster.num_workers else 0,
-        'node_type_id': cluster.node_type_id,
-        'driver_node_type_id': cluster.driver_node_type_id,
-        'spark_version': cluster.spark_version,
-        'autotermination_minutes': cluster.autotermination_minutes if cluster.autotermination_minutes else None,
     }
 
 
@@ -83,6 +85,7 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
     """Fetch cluster details for given cluster identifiers (IDs or names)."""
     clusters = []
     not_found = []
+    policy_cache = {}  # Cache policy names to avoid repeated API calls
     
     print("\nFetching cluster details from Databricks workspace...")
     
@@ -141,11 +144,17 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
         
         if cluster:
             cluster_data = extract_cluster_fields(cluster)
+            # Fetch policy name
+            policy_id = cluster_data['policy_id']
+            policy_name = get_policy_name(w, policy_id, policy_cache)
+            
+            # Add policy name to cluster data
+            cluster_data['policy_name'] = policy_name
+            
             clusters.append(cluster_data)
             # Use tqdm.write() to print without interfering with progress bar
-            state = cluster_data['state'] or 'UNKNOWN'
-            policy_id = cluster_data['policy_id'] or 'None'
-            tqdm.write(f"✓ Found: {cluster_data['cluster_name']} ({state}) - Policy ID: {policy_id}")
+            policy_display = f"{policy_name} ({policy_id})" if policy_name and policy_id else (policy_id or 'No Policy')
+            tqdm.write(f"✓ Found: {cluster_data['cluster_name']} - Policy: {policy_display}")
         else:
             not_found.append(identifier)
             tqdm.write(f"✗ Not Found: {identifier}")
@@ -170,19 +179,9 @@ def export_to_csv(clusters: List[Dict[str, Optional[str]]], filename: str = 'dat
         return
     
     fieldnames = [
-        'cluster_id',
         'cluster_name',
-        'state',
         'policy_id',
-        'cluster_source',
-        'creator_user_name',
-        'start_time',
-        'terminated_time',
-        'num_workers',
-        'node_type_id',
-        'driver_node_type_id',
-        'spark_version',
-        'autotermination_minutes',
+        'policy_name',
     ]
     
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
