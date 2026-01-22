@@ -91,15 +91,38 @@ def fetch_cluster_details(w: WorkspaceClient, cluster_identifiers: List[str]) ->
     cluster_name_to_id = {}
     
     try:
-        # Use tqdm to show progress while loading clusters
-        cluster_list = list(w.clusters.list())
-        for cluster in tqdm(cluster_list, desc="Loading clusters", unit="cluster"):
+        # Iterate directly over the iterator with tqdm to show progress as clusters are fetched
+        # Using total=None since we don't know the count upfront - this shows an indeterminate progress bar
+        print("Connecting to Databricks workspace and fetching clusters...")
+        print("(This may take a moment if you have many clusters)")
+        
+        cluster_iterator = w.clusters.list()
+        cluster_count = 0
+        
+        for cluster in tqdm(cluster_iterator, desc="Loading clusters", unit="cluster", total=None, mininterval=1.0):
+            cluster_count += 1
             if cluster.cluster_id:
                 all_clusters[cluster.cluster_id] = cluster
             if cluster.cluster_name:
                 cluster_name_to_id[cluster.cluster_name] = cluster.cluster_id
+            
+            # Print first cluster as a sign of progress
+            if cluster_count == 1:
+                tqdm.write(f"Successfully connected! First cluster loaded: {cluster.cluster_name or cluster.cluster_id}")
+        
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user.")
+        print(f"Loaded {len(all_clusters)} clusters before cancellation.")
+        sys.exit(1)
     except Exception as e:
-        print(f"Error listing clusters: {e}")
+        print(f"\nError listing clusters: {e}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"\nTroubleshooting:")
+        print(f"1. Verify DATABRICKS_HOST is correct: {os.getenv('DATABRICKS_HOST', 'NOT SET')}")
+        print(f"2. Verify DATABRICKS_TOKEN is set: {'SET' if os.getenv('DATABRICKS_TOKEN') else 'NOT SET'}")
+        print(f"3. Check network connectivity to Databricks workspace")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
     
     print(f"Loaded {len(all_clusters)} clusters from workspace\n")
